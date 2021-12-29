@@ -96,6 +96,7 @@ let defaultConfig = {
   alwaysShowDecimalPlaces: false,
   alwaysShowWordsHistory: false,
   singleListCommandLine: "manual",
+  capsLockWarning: true,
   playSoundOnError: false,
   playSoundOnClick: "off",
   startGraphsAtZero: true,
@@ -634,6 +635,15 @@ export function setSingleListCommandLine(option, nosave) {
   if (!nosave) saveToLocalStorage();
 }
 
+//caps lock warning
+export function setCapsLockWarning(val, nosave) {
+  if (val == undefined) {
+    val = false;
+  }
+  config.capsLockWarning = val;
+  if (!nosave) saveToLocalStorage();
+}
+
 //show all lines
 export function toggleShowAllLines() {
   let sal = !config.showAllLines;
@@ -928,7 +938,8 @@ export function setHighlightMode(mode, nosave) {
       config.funbox === "read_ahead" ||
       config.funbox === "read_ahead_easy" ||
       config.funbox === "read_ahead_hard" ||
-      config.funbox === "tts")
+      config.funbox === "tts" ||
+      config.funbox === "arrows")
   ) {
     Notifications.add("Can't use word highlight with this funbox", 0);
     return;
@@ -1190,7 +1201,7 @@ export function previewFontFamily(font) {
   }
   document.documentElement.style.setProperty(
     "--font",
-    '"' + font.replace(/_/g, " ") + '"'
+    '"' + font.replace(/_/g, " ") + '", "Roboto Mono"'
   );
 }
 
@@ -1657,6 +1668,7 @@ export function apply(configObj) {
     setAlwaysShowDecimalPlaces(configObj.alwaysShowDecimalPlaces, true);
     setAlwaysShowWordsHistory(configObj.alwaysShowWordsHistory, true);
     setSingleListCommandLine(configObj.singleListCommandLine, true);
+    setCapsLockWarning(configObj.capsLockWarning, true);
     setPlaySoundOnError(configObj.playSoundOnError, true);
     setPlaySoundOnClick(configObj.playSoundOnClick, true);
     setStopOnError(configObj.stopOnError, true);

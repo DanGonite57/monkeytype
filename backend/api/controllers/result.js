@@ -25,7 +25,7 @@ class ResultController {
     try {
       const { uid } = req.decodedToken;
       await ResultDAO.deleteAll(uid);
-      Logger.log("user_results_deleted", ``, uid);
+      Logger.log("user_results_deleted", "", uid);
       return res.sendStatus(200);
     } catch (e) {
       next(e);
@@ -99,6 +99,15 @@ class ResultController {
       delete result.hash;
       const serverhash = objecthash(result);
       if (serverhash !== resulthash) {
+        Logger.log(
+          "incorrect_result_hash",
+          {
+            serverhash,
+            resulthash,
+            result,
+          },
+          uid
+        );
         return res.status(400).json({ message: "Incorrect result hash" });
       }
 
@@ -106,7 +115,7 @@ class ResultController {
       //   return res.status(400).json({ message: "Time traveler detected" });
       // }
 
-      result.timestamp = Math.round(Date.now() / 1000) * 1000;
+      result.timestamp = Math.round(result.timestamp / 1000) * 1000;
 
       let timestampres = await ResultDAO.getResultByTimestamp(
         uid,
@@ -115,6 +124,8 @@ class ResultController {
       if (timestampres) {
         return res.status(400).json({ message: "Duplicate result" });
       }
+
+      result.timestamp = Math.round(Date.now() / 1000) * 1000;
 
       try {
         result.keySpacingStats = {

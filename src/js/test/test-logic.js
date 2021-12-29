@@ -20,6 +20,7 @@ import * as TimerProgress from "./timer-progress";
 import * as ChartController from "./chart-controller";
 import * as UI from "./ui";
 import * as QuoteSearchPopup from "./quote-search-popup";
+import * as QuoteSubmitPopup from "./quote-submit-popup";
 import * as PbCrown from "./pb-crown";
 import * as TestTimer from "./test-timer";
 import * as OutOfFocus from "./out-of-focus";
@@ -554,9 +555,10 @@ export function restart(
   setBailout(false);
   PaceCaret.reset();
   $("#showWordHistoryButton").removeClass("loaded");
-  TestUI.focusWords();
+  $("#restartTestButton").blur();
   Funbox.resetMemoryTimer();
   RateQuotePopup.clearQuoteStats();
+  if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: "smooth" });
   $("#wordsInput").val(" ");
 
   TestUI.reset();
@@ -588,6 +590,7 @@ export function restart(
     },
     125,
     async () => {
+      TestUI.focusWords();
       $("#monkey .fast").stop(true, true).css("opacity", 0);
       $("#monkey").stop(true, true).css({ animationDuration: "0s" });
       $("#typingTest").css("opacity", 0).removeClass("hidden");
@@ -796,9 +799,15 @@ export async function init() {
   }
   if (Config.funbox === "plus_one") {
     wordsBound = 2;
+    if (Config.mode === "words" && Config.words < wordsBound) {
+      wordsBound = Config.words;
+    }
   }
   if (Config.funbox === "plus_two") {
     wordsBound = 3;
+    if (Config.mode === "words" && Config.words < wordsBound) {
+      wordsBound = Config.words;
+    }
   }
 
   if (
@@ -891,6 +900,21 @@ export async function init() {
             }
           }
           randomWord = randomcaseword;
+        } else if (Config.funbox === "arrows") {
+          let arrowWord = "";
+          let arrowArray = ["←", "↑", "→", "↓"];
+          let lastchar;
+          for (let i = 0; i < 5; i++) {
+            let random =
+              arrowArray[Math.floor(Math.random() * arrowArray.length)];
+            while (random === lastchar) {
+              random =
+                arrowArray[Math.floor(Math.random() * arrowArray.length)];
+            }
+            lastchar = random;
+            arrowWord += random;
+          }
+          randomWord = arrowWord;
         } else if (Config.funbox === "gibberish") {
           randomWord = Misc.getGibberish();
         } else if (Config.funbox === "58008") {
@@ -964,11 +988,14 @@ export async function init() {
     let quotes = await Misc.getQuotes(Config.language.replace(/_\d*k$/g, ""));
 
     if (quotes.length === 0) {
+      TestUI.setTestRestarting(false);
       Notifications.add(
         `No ${Config.language.replace(/_\d*k$/g, "")} quotes found`,
         0
       );
-      TestUI.setTestRestarting(false);
+      if (firebase.auth().currentUser) {
+        QuoteSubmitPopup.show(false);
+      }
       UpdateConfig.setMode("words");
       restart();
       return;
@@ -1104,7 +1131,7 @@ export function calculateWpmAndRaw() {
   if (words.getCurrent() == input.current) {
     correctWordChars += input.current.length;
   }
-  if (Config.funbox === "nospace") {
+  if (Config.funbox === "nospace" || Config.funbox === "arrows") {
     spaces = 0;
   }
   chars += input.current.length;
@@ -1261,6 +1288,133 @@ export async function addWord() {
     words.push(randomWord);
     TestUI.addWord(randomWord);
   }
+}
+
+var retrySaving = {
+  completedEvent: null,
+  testtime: null,
+  afkseconds: null,
+  pbDiff: null,
+  mode2: null,
+  stats: null,
+  consistency: null,
+  canRetry: false,
+};
+
+export function retrySavingResult() {
+  if (!retrySaving.completedEvent) {
+    Notifications.add(
+      "Could not retry saving the result as the result no longer exists.",
+      0,
+      -1
+    );
+  }
+  if (!retrySaving.canRetry) {
+    return;
+  }
+
+  retrySaving.canRetry = false;
+  $("#retrySavingResultButton").addClass("hidden");
+
+  AccountButton.loading(true);
+
+  Notifications.add("Retrying to save...");
+
+  var {
+    completedEvent,
+    testtime,
+    afkseconds,
+    pbDiff,
+    mode2,
+    stats,
+    consistency,
+  } = retrySaving;
+
+  axiosInstance
+    .post("/results/add", {
+      result: completedEvent,
+    })
+    .then((response) => {
+      AccountButton.loading(false);
+
+      if (response.status !== 200) {
+        Notifications.add("Result not saved. " + response.data.message, -1);
+      } else {
+        completedEvent._id = response.data.insertedId;
+        if (
+          response.data.isPb &&
+          ["english"].includes(completedEvent.language)
+        ) {
+          completedEvent.isPb = true;
+        }
+        if (
+          DB.getSnapshot() !== null &&
+          DB.getSnapshot().results !== undefined
+        ) {
+          DB.getSnapshot().results.unshift(completedEvent);
+          if (DB.getSnapshot().globalStats.time == undefined) {
+            DB.getSnapshot().globalStats.time =
+              testtime + completedEvent.incompleteTestSeconds - afkseconds;
+          } else {
+            DB.getSnapshot().globalStats.time +=
+              testtime + completedEvent.incompleteTestSeconds - afkseconds;
+          }
+          if (DB.getSnapshot().globalStats.started == undefined) {
+            DB.getSnapshot().globalStats.started = TestStats.restartCount + 1;
+          } else {
+            DB.getSnapshot().globalStats.started += TestStats.restartCount + 1;
+          }
+          if (DB.getSnapshot().globalStats.completed == undefined) {
+            DB.getSnapshot().globalStats.completed = 1;
+          } else {
+            DB.getSnapshot().globalStats.completed += 1;
+          }
+        }
+        try {
+          firebase.analytics().logEvent("testCompleted", completedEvent);
+        } catch (e) {
+          console.log("Analytics unavailable");
+        }
+
+        if (response.data.isPb) {
+          //new pb
+          PbCrown.show();
+          $("#result .stats .wpm .crown").attr(
+            "aria-label",
+            "+" + Misc.roundTo2(pbDiff)
+          );
+          DB.saveLocalPB(
+            Config.mode,
+            mode2,
+            Config.punctuation,
+            Config.language,
+            Config.difficulty,
+            Config.lazyMode,
+            stats.wpm,
+            stats.acc,
+            stats.wpmRaw,
+            consistency
+          );
+        } else {
+          PbCrown.hide();
+          // if (localPb) {
+          //   Notifications.add(
+          //     "Local PB data is out of sync! Refresh the page to resync it or contact Miodec on Discord.",
+          //     15000
+          //   );
+          // }
+        }
+      }
+      $("#retrySavingResultButton").addClass("hidden");
+      Notifications.add("Result saved", 1);
+    })
+    .catch((e) => {
+      AccountButton.loading(false);
+      let msg = e?.response?.data?.message ?? e.message;
+      Notifications.add("Failed to save result: " + msg, -1);
+      $("#retrySavingResultButton").removeClass("hidden");
+      retrySaving.canRetry = true;
+    });
 }
 
 export async function finish(difficultyFailed = false) {
@@ -2042,11 +2196,24 @@ export async function finish(difficultyFailed = false) {
                     // }
                   }
                 }
+
+                $("#retrySavingResultButton").addClass("hidden");
               })
               .catch((e) => {
                 AccountButton.loading(false);
                 let msg = e?.response?.data?.message ?? e.message;
                 Notifications.add("Failed to save result: " + msg, -1);
+                $("#retrySavingResultButton").removeClass("hidden");
+
+                retrySaving.completedEvent = completedEvent;
+                retrySaving.testtime = testtime;
+                retrySaving.afkseconds = afkseconds;
+                retrySaving.pbDiff = pbDiff;
+                retrySaving.mode2 = mode2;
+                retrySaving.stats = stats;
+                retrySaving.consistency = consistency;
+
+                retrySaving.canRetry = true;
               });
           });
         });
@@ -2069,6 +2236,8 @@ export async function finish(difficultyFailed = false) {
       }
     }
   }
+
+  $("#retrySavingResultButton").addClass("hidden");
 
   if (firebase.auth().currentUser != null) {
     $("#result .loginTip").addClass("hidden");
@@ -2233,7 +2402,10 @@ export async function finish(difficultyFailed = false) {
       `Test Completed: ${stats.wpm} wpm ${stats.acc}% acc ${stats.wpmRaw} raw ${consistency}% consistency`
     );
   }
-
+  if (window.scrollY > 0)
+    $([document.documentElement, document.body])
+      .stop()
+      .animate({ scrollTop: 0 }, 250);
   UI.swapElements(
     $("#typingTest"),
     $("#result"),
@@ -2247,6 +2419,7 @@ export async function finish(difficultyFailed = false) {
         TestUI.applyBurstHeatmap();
       }
       $("#result").focus();
+      window.scrollTo({ top: 0 });
       $("#testModesNotice").addClass("hidden");
     },
     () => {
